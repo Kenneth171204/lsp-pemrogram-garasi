@@ -26,6 +26,9 @@ yarn-error.log*
 .env*
 .env.local
 
+# supabase cli temp
+supabase/.temp/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
