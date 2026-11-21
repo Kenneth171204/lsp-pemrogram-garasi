@@ -1,31 +1,45 @@
-/**
- * @fileoverview Service Class untuk manajemen autentikasi, registrasi, dan verifikasi penyewa.
- */
-
 import { SupabaseClient } from '@supabase/supabase-js';
+import { translateError } from '@/lib/errors';
 import { supabase as defaultSupabase } from '@/lib/supabase';
 import { RegisterInput, User, UserStatus } from '@/types';
 
-/**
- * Mengelola seluruh logika bisnis autentikasi pengguna, registrasi penyewa baru,
- * verifikasi akun oleh Admin, serta pengecekan hak akses menyewa garasi.
- */
 export class AuthService {
+  private static readonly GENERAL_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  private static readonly GMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@gmail\.com$/i;
+  public static readonly MIN_PASSWORD_LENGTH = 6;
+
   private readonly db: SupabaseClient;
 
-  /**
-   * Membuat instance baru dari AuthService.
-   * @param db - Client Supabase opsional untuk dependency injection (berguna untuk testing).
-   */
   constructor(db: SupabaseClient = defaultSupabase) {
     this.db = db;
   }
 
-  /**
-   * Memvalidasi data input pendaftaran penyewa baru.
-   * @param input - Data registrasi penyewa (NIK, nama lengkap, telepon, email, password).
-   * @throws {Error} Jika terdapat field yang kosong atau tidak valid.
-   */
+  public isValidEmail(email: string): boolean {
+    return AuthService.GENERAL_EMAIL_REGEX.test(email.trim());
+  }
+
+  public isValidGmail(email: string): boolean {
+    return AuthService.GMAIL_REGEX.test(email.trim());
+  }
+
+  // Mengizinkan domain non-Gmail agar akun admin@garasi.com tetap bisa login
+  public validateLoginInput(email: string, password: string): void {
+    const cleanEmail = email?.trim() ?? '';
+    const cleanPassword = password ?? '';
+
+    if (!cleanEmail) {
+      throw new Error('Email wajib diisi.');
+    }
+    if (!this.isValidEmail(cleanEmail)) {
+      throw new Error(
+        'Format email tidak valid (harus mengandung @ dan domain yang benar).'
+      );
+    }
+    if (!cleanPassword || cleanPassword.length < AuthService.MIN_PASSWORD_LENGTH) {
+      throw new Error('Password minimal harus 6 karakter.');
+    }
+  }
+
   public validateRegistrationInput(input: RegisterInput): void {
     const nik = input.nik?.trim() ?? '';
     const fullName = input.fullName?.trim() ?? '';
@@ -42,29 +56,24 @@ export class AuthService {
     if (!phone || !/^[0-9+\-\s]{8,20}$/.test(phone)) {
       throw new Error('Nomor telepon tidak valid (minimal 8 digit).');
     }
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      throw new Error('Format email tidak valid.');
+    if (!email || !this.isValidGmail(email)) {
+      throw new Error('Email harus menggunakan format @gmail.com yang valid.');
     }
-    if (!password || password.length < 6) {
-      throw new Error('Password minimal 6 karakter.');
+    if (!password || password.length < AuthService.MIN_PASSWORD_LENGTH) {
+      throw new Error('Password minimal harus 6 karakter.');
+    }
+    if (
+      input.confirmPassword !== undefined &&
+      input.confirmPassword !== password
+    ) {
+      throw new Error('Konfirmasi password tidak cocok.');
     }
   }
 
-  /**
-   * Memeriksa apakah akun pengguna diizinkan untuk melakukan transaksi sewa garasi.
-   * Penyewa hanya dapat menyewa apabila status akunnya sudah `approved`.
-   * @param user - Objek pengguna yang memiliki properti `role` dan `status`.
-   * @returns `true` jika pengguna adalah penyewa berstatus `approved`, selain itu `false`.
-   */
   public canTenantRent(user: Pick<User, 'role' | 'status'>): boolean {
     return user.role === 'penyewa' && user.status === 'approved';
   }
 
-  /**
-   * Memastikan penyewa telah diverifikasi (`approved`) sebelum melakukan sewa garasi.
-   * @param user - Data pengguna yang akan menyewa.
-   * @throws {Error} Jika pengguna bukan penyewa atau statusnya masih `pending` / `rejected`.
-   */
   public ensureTenantApproved(user: Pick<User, 'role' | 'status'>): void {
     if (user.role !== 'penyewa') {
       throw new Error('Hanya akun dengan role penyewa yang dapat menyewa garasi.');
@@ -81,12 +90,6 @@ export class AuthService {
     }
   }
 
-  /**
-   * Mendaftarkan penyewa baru ke database dengan status awal `pending`.
-   * @param input - Data pendaftaran penyewa baru.
-   * @returns Data pengguna yang berhasil dibuat.
-   * @throws {Error} Jika validasi gagal, email/NIK sudah terdaftar, atau query database gagal.
-   */
   public async registerTenant(input: RegisterInput): Promise<User> {
     this.validateRegistrationInput(input);
 
@@ -100,109 +103,96 @@ export class AuthService {
       status: 'pending' as const,
     };
 
-    const { data, error } = await this.db
-      .from('users')
-      .insert(payload)
-      .select('id, nik, full_name, phone, email, role, status, created_at')
-      .single();
+    try {
+      const { data, error } = await this.db
+        .from('users')
+        .insert(payload)
+        .select('id, nik, full_name, phone, email, role, status, created_at')
+        .single();
 
-    if (error) {
-      if (error.code === '23505') {
-        throw new Error('Email atau NIK sudah terdaftar di sistem.');
+      if (error) {
+        throw new Error(translateError(error, 'Gagal mendaftarkan penyewa baru.'));
       }
-      throw new Error(`Gagal mendaftarkan penyewa: ${error.message}`);
-    }
 
-    return data as User;
+      return data as User;
+    } catch (err) {
+      throw new Error(translateError(err, 'Gagal mendaftarkan penyewa baru.'));
+    }
   }
 
-  /**
-   * Melakukan autentikasi pengguna berdasarkan email dan password.
-   * @param email - Email pengguna yang digunakan sebagai username.
-   * @param password - Password pengguna.
-   * @returns Data profil pengguna yang terautentikasi.
-   * @throws {Error} Jika kredensial salah atau akun telah ditolak Admin (`rejected`).
-   */
   public async login(email: string, password: string): Promise<User> {
-    const cleanEmail = email?.trim().toLowerCase() ?? '';
-    if (!cleanEmail || !password) {
-      throw new Error('Email dan password wajib diisi.');
-    }
+    this.validateLoginInput(email, password);
+    const cleanEmail = email.trim().toLowerCase();
 
-    const { data, error } = await this.db
-      .from('users')
-      .select('id, nik, full_name, phone, email, role, status, created_at')
-      .eq('email', cleanEmail)
-      .eq('password', password)
-      .maybeSingle();
+    try {
+      const { data, error } = await this.db
+        .from('users')
+        .select('id, nik, full_name, phone, email, role, status, created_at')
+        .eq('email', cleanEmail)
+        .eq('password', password)
+        .maybeSingle();
 
-    if (error) {
-      throw new Error(`Terjadi kesalahan saat login: ${error.message}`);
-    }
-    if (!data) {
-      throw new Error('Email atau password salah.');
-    }
+      if (error) {
+        throw new Error(translateError(error, 'Terjadi kesalahan saat masuk ke sistem.'));
+      }
+      if (!data) {
+        throw new Error('Email atau password salah.');
+      }
 
-    const user = data as User;
-    if (user.status === 'rejected') {
-      throw new Error(
-        'Akun Anda telah ditolak oleh Admin. Silakan hubungi pengelola garasi.'
-      );
-    }
+      const user = data as User;
+      if (user.status === 'rejected') {
+        throw new Error(
+          'Akun Anda telah ditolak oleh Admin. Silakan hubungi pengelola garasi.'
+        );
+      }
 
-    return user;
+      return user;
+    } catch (err) {
+      throw new Error(translateError(err, 'Terjadi kesalahan saat masuk ke sistem.'));
+    }
   }
 
-  /**
-   * Mengambil data pengguna berdasarkan ID.
-   * @param userId - UUID pengguna.
-   * @returns Data pengguna terkini atau null jika tidak ditemukan.
-   */
   public async getUserById(userId: string): Promise<User | null> {
-    const { data, error } = await this.db
-      .from('users')
-      .select('id, nik, full_name, phone, email, role, status, created_at')
-      .eq('id', userId)
-      .maybeSingle();
+    try {
+      const { data, error } = await this.db
+        .from('users')
+        .select('id, nik, full_name, phone, email, role, status, created_at')
+        .eq('id', userId)
+        .maybeSingle();
 
-    if (error) {
-      throw new Error(`Gagal mengambil data pengguna: ${error.message}`);
+      if (error) {
+        throw new Error(translateError(error, 'Gagal mengambil data pengguna.'));
+      }
+
+      return (data as User) ?? null;
+    } catch (err) {
+      throw new Error(translateError(err, 'Gagal mengambil data pengguna.'));
     }
-
-    return (data as User) ?? null;
   }
 
-  /**
-   * Mengambil daftar seluruh penyewa, opsional difilter berdasarkan status verifikasi.
-   * @param statusFilter - Filter status (`pending`, `approved`, `rejected`).
-   * @returns Daftar pengguna dengan role `penyewa`.
-   */
   public async getTenants(statusFilter?: UserStatus): Promise<User[]> {
-    let query = this.db
-      .from('users')
-      .select('id, nik, full_name, phone, email, role, status, created_at')
-      .eq('role', 'penyewa')
-      .order('created_at', { ascending: false });
+    try {
+      let query = this.db
+        .from('users')
+        .select('id, nik, full_name, phone, email, role, status, created_at')
+        .eq('role', 'penyewa')
+        .order('created_at', { ascending: false });
 
-    if (statusFilter) {
-      query = query.eq('status', statusFilter);
+      if (statusFilter) {
+        query = query.eq('status', statusFilter);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        throw new Error(translateError(error, 'Gagal memuat daftar penyewa.'));
+      }
+
+      return (data ?? []) as User[];
+    } catch (err) {
+      throw new Error(translateError(err, 'Gagal memuat daftar penyewa.'));
     }
-
-    const { data, error } = await query;
-    if (error) {
-      throw new Error(`Gagal memuat daftar penyewa: ${error.message}`);
-    }
-
-    return (data ?? []) as User[];
   }
 
-  /**
-   * Memperbarui status verifikasi penyewa oleh Admin (`approved` atau `rejected`).
-   * @param userId - UUID penyewa yang akan diverifikasi.
-   * @param decision - Keputusan verifikasi (`approved` atau `rejected`).
-   * @returns Data penyewa setelah status diperbarui.
-   * @throws {Error} Jika update database gagal.
-   */
   public async verifyTenant(
     userId: string,
     decision: Extract<UserStatus, 'approved' | 'rejected'>
@@ -211,18 +201,22 @@ export class AuthService {
       throw new Error('ID penyewa wajib disertakan.');
     }
 
-    const { data, error } = await this.db
-      .from('users')
-      .update({ status: decision })
-      .eq('id', userId)
-      .eq('role', 'penyewa')
-      .select('id, nik, full_name, phone, email, role, status, created_at')
-      .single();
+    try {
+      const { data, error } = await this.db
+        .from('users')
+        .update({ status: decision })
+        .eq('id', userId)
+        .eq('role', 'penyewa')
+        .select('id, nik, full_name, phone, email, role, status, created_at')
+        .single();
 
-    if (error) {
-      throw new Error(`Gagal memverifikasi penyewa: ${error.message}`);
+      if (error) {
+        throw new Error(translateError(error, 'Gagal memverifikasi penyewa.'));
+      }
+
+      return data as User;
+    } catch (err) {
+      throw new Error(translateError(err, 'Gagal memverifikasi penyewa.'));
     }
-
-    return data as User;
   }
 }

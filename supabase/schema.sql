@@ -1,14 +1,5 @@
--- ============================================================================
--- Sistem Penyewaan Garasi Kendaraan (LSP Pemrogram)
--- Schema PostgreSQL + Seeder Admin + Storage Bucket Setup untuk Supabase
--- ============================================================================
-
--- Aktifkan ekstensi pgcrypto / uuid jika belum aktif
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- ============================================================================
--- 1. TABEL USERS (Admin & Penyewa)
--- ============================================================================
 CREATE TABLE IF NOT EXISTS public.users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   nik VARCHAR(20) UNIQUE,
@@ -21,9 +12,6 @@ CREATE TABLE IF NOT EXISTS public.users (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ============================================================================
--- 2. TABEL GARAGES (Sepeda: S001, Mobil: C001, Mobil Listrik: E001)
--- ============================================================================
 CREATE TABLE IF NOT EXISTS public.garages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   code VARCHAR(10) UNIQUE NOT NULL,
@@ -34,9 +22,6 @@ CREATE TABLE IF NOT EXISTS public.garages (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ============================================================================
--- 3. TABEL RENTALS (Transaksi Sewa Garasi)
--- ============================================================================
 CREATE TABLE IF NOT EXISTS public.rentals (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
@@ -58,9 +43,6 @@ CREATE TABLE IF NOT EXISTS public.rentals (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ============================================================================
--- 4. TABEL RENTAL_EXTENSIONS (Riwayat Perpanjangan Sewa oleh Admin)
--- ============================================================================
 CREATE TABLE IF NOT EXISTS public.rental_extensions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   rental_id UUID NOT NULL REFERENCES public.rentals(id) ON DELETE CASCADE,
@@ -73,9 +55,6 @@ CREATE TABLE IF NOT EXISTS public.rental_extensions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ============================================================================
--- 5. INDEXES UNTUK PERFORMA QUERY
--- ============================================================================
 CREATE INDEX IF NOT EXISTS idx_users_role_status ON public.users(role, status);
 CREATE INDEX IF NOT EXISTS idx_garages_type_status ON public.garages(type, status);
 CREATE INDEX IF NOT EXISTS idx_garages_code ON public.garages(code);
@@ -84,9 +63,6 @@ CREATE INDEX IF NOT EXISTS idx_rentals_garage_id ON public.rentals(garage_id);
 CREATE INDEX IF NOT EXISTS idx_rentals_status_dates ON public.rentals(status, start_date, end_date);
 CREATE INDEX IF NOT EXISTS idx_rental_extensions_rental_id ON public.rental_extensions(rental_id);
 
--- ============================================================================
--- 6. PERMISSIONS & ROW LEVEL SECURITY (RLS)
--- ============================================================================
 ALTER TABLE public.users DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.garages DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.rentals DISABLE ROW LEVEL SECURITY;
@@ -98,9 +74,7 @@ GRANT ALL ON TABLE public.garages TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.rentals TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.rental_extensions TO anon, authenticated, service_role;
 
--- ============================================================================
--- 7. SEEDER AKUN ADMIN DEFAULT
--- ============================================================================
+-- Admin default
 INSERT INTO public.users (nik, full_name, phone, email, password, role, status)
 VALUES (
   '0000000000000001',
@@ -113,14 +87,11 @@ VALUES (
 )
 ON CONFLICT (email) DO NOTHING;
 
--- ============================================================================
--- 8. SUPABASE STORAGE BUCKET: payment-proofs (PUBLIC)
--- ============================================================================
+-- Bucket publik untuk bukti pelunasan & perpanjangan sewa
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('payment-proofs', 'payment-proofs', true)
 ON CONFLICT (id) DO UPDATE SET public = true;
 
--- Hapus policy lama jika ada agar idempotent saat dijalankan ulang
 DROP POLICY IF EXISTS "Public read payment-proofs" ON storage.objects;
 DROP POLICY IF EXISTS "Public insert payment-proofs" ON storage.objects;
 DROP POLICY IF EXISTS "Public update payment-proofs" ON storage.objects;
@@ -143,8 +114,5 @@ CREATE POLICY "Public delete payment-proofs"
   ON storage.objects FOR DELETE
   USING (bucket_id = 'payment-proofs');
 
--- ============================================================================
--- 9. REFRESH POSTGREST SCHEMA CACHE
--- ============================================================================
+-- Refresh schema cache PostgREST
 NOTIFY pgrst, 'reload schema';
-

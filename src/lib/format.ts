@@ -1,12 +1,5 @@
-/**
- * @fileoverview Helper formatting mata uang Rupiah, tanggal Indonesia, dan label domain.
- */
-
 import { GarageType, RentalType, UserStatus, VehicleType } from '@/types';
 
-/**
- * Memformat angka menjadi format Rupiah Indonesia (contoh: `Rp 150.000`).
- */
 export function formatRupiah(amount: number): string {
   return new Intl.NumberFormat('id-ID', {
     style: 'currency',
@@ -16,9 +9,6 @@ export function formatRupiah(amount: number): string {
   }).format(amount || 0);
 }
 
-/**
- * Memformat tanggal `YYYY-MM-DD` menjadi format tanggal Indonesia yang mudah dibaca.
- */
 export function formatDateID(dateStr: string): string {
   if (!dateStr) return '-';
   const clean = dateStr.slice(0, 10);

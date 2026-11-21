@@ -3,11 +3,19 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { LogIn, AlertCircle, Info } from 'lucide-react';
-import { AuthService } from '@/services/AuthService';
+import { Info, LogIn } from 'lucide-react';
+import { AlertBanner } from '@/components/AlertBanner';
+import { PasswordInput } from '@/components/PasswordInput';
 import { useAuth } from '@/context/AuthContext';
+import { translateError } from '@/lib/errors';
+import { AuthService } from '@/services/AuthService';
 
 const authService = new AuthService();
+
+interface LoginFieldErrors {
+  email?: string;
+  password?: string;
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -15,20 +23,84 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [touched, setTouched] = useState<{ email?: boolean; password?: boolean }>({});
+  const [fieldErrors, setFieldErrors] = useState<LoginFieldErrors>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const validateField = (
+    field: keyof LoginFieldErrors,
+    nextEmail: string,
+    nextPassword: string
+  ): string | undefined => {
+    if (field === 'email') {
+      const trimmed = nextEmail.trim();
+      if (!trimmed) return 'Email wajib diisi.';
+      if (!authService.isValidEmail(trimmed)) {
+        return 'Format email tidak valid (contoh: nama@domain.com).';
+      }
+      return undefined;
+    }
+
+    if (field === 'password') {
+      if (!nextPassword || nextPassword.length < AuthService.MIN_PASSWORD_LENGTH) {
+        return 'Password minimal harus 6 karakter.';
+      }
+      return undefined;
+    }
+    return undefined;
+  };
+
+  const handleEmailChange = (val: string) => {
+    setEmail(val);
+    if (touched.email) {
+      setFieldErrors((prev) => ({
+        ...prev,
+        email: validateField('email', val, password),
+      }));
+    }
+  };
+
+  const handlePasswordChange = (val: string) => {
+    setPassword(val);
+    if (touched.password) {
+      setFieldErrors((prev) => ({
+        ...prev,
+        password: validateField('password', email, val),
+      }));
+    }
+  };
+
+  const handleBlur = (field: keyof LoginFieldErrors) => {
+    setTouched((prev) => ({ ...prev, [field]: true }));
+    setFieldErrors((prev) => ({
+      ...prev,
+      [field]: validateField(field, email, password),
+    }));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setSubmitting(true);
 
+    const nextErrors: LoginFieldErrors = {
+      email: validateField('email', email, password),
+      password: validateField('password', email, password),
+    };
+    setTouched({ email: true, password: true });
+    setFieldErrors(nextErrors);
+
+    if (nextErrors.email || nextErrors.password) {
+      return;
+    }
+
+    setSubmitting(true);
     try {
       const user = await authService.login(email, password);
       setSessionUser(user);
       router.push(user.role === 'admin' ? '/admin' : '/penyewa');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal masuk ke sistem.');
+      setError(translateError(err, 'Gagal masuk ke sistem.'));
     } finally {
       setSubmitting(false);
     }
@@ -60,45 +132,63 @@ export default function LoginPage() {
         </div>
 
         {error && (
-          <div className="mb-4 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{error}</span>
+          <div className="mb-4">
+            <AlertBanner
+              variant="error"
+              message={error}
+              onClose={() => setError(null)}
+            />
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} noValidate className="space-y-4">
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
+            <label
+              htmlFor="login-email"
+              className="mb-1 block text-sm font-medium text-slate-700"
+            >
               Email (Username)
             </label>
             <input
+              id="login-email"
               type="email"
               required
+              disabled={submitting}
+              autoComplete="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="nama@email.com"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              onChange={(e) => handleEmailChange(e.target.value)}
+              onBlur={() => handleBlur('email')}
+              placeholder="nama@domain.com"
+              aria-invalid={Boolean(fieldErrors.email)}
+              className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 ${
+                fieldErrors.email
+                  ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-500/20'
+                  : 'border-slate-300 focus:border-blue-500 focus:ring-blue-500/20'
+              }`}
             />
+            {fieldErrors.email && (
+              <p className="mt-1 text-xs font-medium text-rose-600">
+                {fieldErrors.email}
+              </p>
+            )}
           </div>
 
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              Password
-            </label>
-            <input
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-            />
-          </div>
+          <PasswordInput
+            id="login-password"
+            label="Password"
+            required
+            disabled={submitting}
+            autoComplete="current-password"
+            value={password}
+            onChange={handlePasswordChange}
+            onBlur={() => handleBlur('password')}
+            error={fieldErrors.password}
+          />
 
           <button
             type="submit"
             disabled={submitting}
-            className="w-full rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
+            className="w-full rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submitting ? 'Memproses...' : 'Masuk'}
           </button>

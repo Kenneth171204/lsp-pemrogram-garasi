@@ -17,9 +17,6 @@ const authService = new AuthService();
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-/**
- * Provider konteks autentikasi pengguna pada sisi client.
- */
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -44,7 +41,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return latest;
       }
     } catch {
-      // Abaikan error sinkronisasi agar sesi tidak langsung hilang saat offline
+      // Abaikan error sinkronisasi agar sesi tidak hilang saat offline
     }
     return user;
   }, [user, setSessionUser]);
@@ -67,7 +64,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 setSessionUser(fresh);
               }
             } catch {
-              // Gunakan data lokal sementara
+              // Gunakan sesi lokal jika server tidak terjangkau
             }
           }
         }
@@ -90,9 +87,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-/**
- * Hook untuk mengakses state autentikasi pengguna.
- */
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   if (!ctx) {

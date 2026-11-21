@@ -3,21 +3,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  AlertCircle,
   BatteryCharging,
   Calendar,
-  CheckCircle2,
   Clock,
   ExternalLink,
   RefreshCw,
   Upload,
   Warehouse,
 } from 'lucide-react';
+import { AlertBanner } from '@/components/AlertBanner';
 import { useAuth } from '@/context/AuthContext';
-import { AuthService } from '@/services/AuthService';
-import { GarageService } from '@/services/GarageService';
-import { RentalService } from '@/services/RentalService';
-import { StorageService } from '@/services/StorageService';
+import { translateError, validateImageFile } from '@/lib/errors';
 import {
   GARAGE_TYPE_LABELS,
   RENTAL_TYPE_LABELS,
@@ -25,6 +21,10 @@ import {
   formatDateID,
   formatRupiah,
 } from '@/lib/format';
+import { AuthService } from '@/services/AuthService';
+import { GarageService } from '@/services/GarageService';
+import { RentalService } from '@/services/RentalService';
+import { StorageService } from '@/services/StorageService';
 import {
   Garage,
   RentalType,
@@ -37,16 +37,25 @@ const garageService = new GarageService();
 const rentalService = new RentalService();
 const storageService = new StorageService();
 
+interface RentalFormErrors {
+  vehicleBrand?: string;
+  licensePlate?: string;
+  maxBatteryKwh?: string;
+  currentBatteryKwh?: string;
+  selectedGarageId?: string;
+  durationDays?: string;
+  proofFile?: string;
+}
+
 export default function PenyewaDashboardPage() {
   const router = useRouter();
   const { user, loading, refreshUser } = useAuth();
 
-  // Data Garasi & Riwayat Sewa
   const [availableGarages, setAvailableGarages] = useState<Garage[]>([]);
   const [myRentals, setMyRentals] = useState<RentalWithDetails[]>([]);
   const [loadingData, setLoadingData] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  // Form Sewa Baru
   const [vehicleType, setVehicleType] = useState<VehicleType>('mobil');
   const [licensePlate, setLicensePlate] = useState('');
   const [vehicleBrand, setVehicleBrand] = useState('');
@@ -57,6 +66,7 @@ export default function PenyewaDashboardPage() {
   const [durationDays, setDurationDays] = useState<number>(1);
   const [proofFile, setProofFile] = useState<File | null>(null);
 
+  const [fieldErrors, setFieldErrors] = useState<RentalFormErrors>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -70,10 +80,9 @@ export default function PenyewaDashboardPage() {
       setSelectedGarageId((prev) =>
         list.some((g) => g.id === prev) ? prev : list[0]?.id ?? ''
       );
+      setFieldErrors((prev) => ({ ...prev, selectedGarageId: undefined }));
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Gagal memuat daftar garasi tersedia.'
-      );
+      setError(translateError(err, 'Gagal memuat daftar garasi tersedia.'));
     }
   }, []);
 
@@ -83,9 +92,7 @@ export default function PenyewaDashboardPage() {
       const list = await rentalService.getUserRentals(userId);
       setMyRentals(list);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Gagal memuat riwayat sewa Anda.'
-      );
+      setError(translateError(err, 'Gagal memuat riwayat sewa Anda.'));
     } finally {
       setLoadingData(false);
     }
@@ -111,10 +118,15 @@ export default function PenyewaDashboardPage() {
     [availableGarages, selectedGarageId]
   );
 
-  // Hitung tanggal selesai & rincian biaya real-time
   const previewCalculation = useMemo(() => {
     if (!selectedGarage) {
-      return { endDate: '-', rentalCost: 0, electricityCost: 0, totalCost: 0, error: null as string | null };
+      return {
+        endDate: '-',
+        rentalCost: 0,
+        electricityCost: 0,
+        totalCost: 0,
+        error: null as string | null,
+      };
     }
 
     try {
@@ -143,7 +155,7 @@ export default function PenyewaDashboardPage() {
         rentalCost: 0,
         electricityCost: 0,
         totalCost: 0,
-        error: err instanceof Error ? err.message : 'Input belum valid',
+        error: translateError(err, 'Input belum valid.'),
       };
     }
   }, [
@@ -158,6 +170,66 @@ export default function PenyewaDashboardPage() {
 
   const isApproved = user ? authService.canTenantRent(user) : false;
 
+  const validateRentalForm = (): RentalFormErrors => {
+    const errs: RentalFormErrors = {};
+
+    if (!vehicleBrand.trim()) {
+      errs.vehicleBrand = 'Merek dan tipe kendaraan wajib diisi.';
+    }
+
+    if (vehicleType !== 'sepeda' && !licensePlate.trim()) {
+      errs.licensePlate = 'Nomor plat kendaraan wajib diisi untuk selain sepeda.';
+    }
+
+    if (vehicleType === 'mobil_listrik') {
+      const maxKwh = Number(maxBatteryKwh);
+      const curKwh = Number(currentBatteryKwh);
+      if (!maxBatteryKwh.trim() || !Number.isFinite(maxKwh) || maxKwh <= 0) {
+        errs.maxBatteryKwh = 'Kapasitas Max Charge wajib diisi lebih dari 0 kWh.';
+      }
+      if (!currentBatteryKwh.trim() || !Number.isFinite(curKwh) || curKwh < 0) {
+        errs.currentBatteryKwh = 'Current Battery wajib diisi dan tidak boleh negatif.';
+      } else if (Number.isFinite(maxKwh) && maxKwh > 0 && curKwh > maxKwh) {
+        errs.currentBatteryKwh =
+          'Current Battery tidak boleh melebihi Kapasitas Max Charge.';
+      }
+    }
+
+    if (!selectedGarage) {
+      errs.selectedGarageId = 'Silakan pilih unit garasi yang tersedia.';
+    }
+
+    if (rentalType === 'harian') {
+      if (
+        !Number.isInteger(durationDays) ||
+        durationDays < 1 ||
+        durationDays > RentalService.MAX_DAILY_RENTAL_DAYS
+      ) {
+        errs.durationDays = `Sewa harian harus antara 1 hingga ${RentalService.MAX_DAILY_RENTAL_DAYS} hari.`;
+      }
+    }
+
+    const fileErr = validateImageFile(proofFile);
+    if (fileErr) {
+      errs.proofFile = fileErr;
+    }
+
+    return errs;
+  };
+
+  const handleProofFileChange = (file: File | null) => {
+    setProofFile(file);
+    if (!file) {
+      setFieldErrors((prev) => ({ ...prev, proofFile: undefined }));
+      return;
+    }
+    const fileErr = validateImageFile(file);
+    setFieldErrors((prev) => ({
+      ...prev,
+      proofFile: fileErr ?? undefined,
+    }));
+  };
+
   const handleSubmitRental = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
@@ -168,12 +240,10 @@ export default function PenyewaDashboardPage() {
       setError('Akun Anda belum diverifikasi (approved) oleh Admin.');
       return;
     }
-    if (!selectedGarage) {
-      setError('Silakan pilih unit garasi yang tersedia terlebih dahulu.');
-      return;
-    }
-    if (!proofFile) {
-      setError('Bukti pelunasan biaya wajib diunggah.');
+
+    const errs = validateRentalForm();
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0 || !selectedGarage || !proofFile) {
       return;
     }
 
@@ -183,7 +253,7 @@ export default function PenyewaDashboardPage() {
       const curKwh =
         vehicleType === 'mobil_listrik' ? Number(currentBatteryKwh) : null;
 
-      // Validasi lokal sebelum upload gambar agar storage bersih jika input salah
+      // Validasi sebelum upload agar storage tidak terisi file jika input ditolak
       rentalService.validateVehicleInput({
         vehicleType,
         licensePlate: vehicleType === 'sepeda' ? null : licensePlate,
@@ -227,27 +297,29 @@ export default function PenyewaDashboardPage() {
       setLicensePlate('');
       setVehicleBrand('');
       setProofFile(null);
+      setFieldErrors({});
 
       await Promise.all([
         loadGaragesForVehicle(vehicleType),
         loadMyRentals(user.id),
       ]);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Gagal membuat transaksi sewa garasi.'
-      );
+      setError(translateError(err, 'Gagal membuat transaksi sewa garasi.'));
     } finally {
       setSubmitting(false);
     }
   };
 
   if (loading || !user) {
-    return <div className="py-10 text-center text-sm text-slate-500">Memuat dashboard...</div>;
+    return (
+      <div className="py-10 text-center text-sm text-slate-500">
+        Memuat dashboard...
+      </div>
+    );
   }
 
   return (
     <div className="space-y-6">
-      {/* Header & Refresh Status */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">
@@ -260,21 +332,29 @@ export default function PenyewaDashboardPage() {
 
         <button
           type="button"
+          disabled={refreshing || submitting}
           onClick={async () => {
-            await refreshUser();
-            await Promise.all([
-              loadGaragesForVehicle(vehicleType),
-              loadMyRentals(user.id),
-            ]);
+            setRefreshing(true);
+            setError(null);
+            try {
+              await refreshUser();
+              await Promise.all([
+                loadGaragesForVehicle(vehicleType),
+                loadMyRentals(user.id),
+              ]);
+            } catch (err) {
+              setError(translateError(err, 'Gagal menyegarkan data.'));
+            } finally {
+              setRefreshing(false);
+            }
           }}
-          className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
         >
-          <RefreshCw className="h-4 w-4" />
-          Segarkan Status &amp; Data
+          <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+          {refreshing ? 'Menyegarkan...' : 'Segarkan Status & Data'}
         </button>
       </div>
 
-      {/* Banner Status Verifikasi */}
       {!isApproved && (
         <div className="flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-900">
           <Clock className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
@@ -292,21 +372,22 @@ export default function PenyewaDashboardPage() {
       )}
 
       {error && (
-        <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-sm text-rose-700">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{error}</span>
-        </div>
+        <AlertBanner
+          variant="error"
+          message={error}
+          onClose={() => setError(null)}
+        />
       )}
 
       {successMsg && (
-        <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3.5 text-sm text-emerald-800">
-          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-          <span>{successMsg}</span>
-        </div>
+        <AlertBanner
+          variant="success"
+          message={successMsg}
+          onClose={() => setSuccessMsg(null)}
+        />
       )}
 
       <div className="grid gap-6 lg:grid-cols-12">
-        {/* Form Sewa Baru Garasi */}
         <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-7">
           <div className="mb-5 flex items-center gap-2.5 border-b border-slate-100 pb-4">
             <Warehouse className="h-5 w-5 text-blue-600" />
@@ -320,8 +401,7 @@ export default function PenyewaDashboardPage() {
             </div>
           </div>
 
-          <form onSubmit={handleSubmitRental} className="space-y-5">
-            {/* 1. Tipe Kendaraan */}
+          <form onSubmit={handleSubmitRental} noValidate className="space-y-5">
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">
@@ -329,8 +409,16 @@ export default function PenyewaDashboardPage() {
                 </label>
                 <select
                   value={vehicleType}
-                  onChange={(e) => setVehicleType(e.target.value as VehicleType)}
-                  disabled={!isApproved}
+                  onChange={(e) => {
+                    setVehicleType(e.target.value as VehicleType);
+                    setFieldErrors((prev) => ({
+                      ...prev,
+                      licensePlate: undefined,
+                      maxBatteryKwh: undefined,
+                      currentBatteryKwh: undefined,
+                    }));
+                  }}
+                  disabled={!isApproved || submitting}
                   className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none disabled:bg-slate-100"
                 >
                   {(Object.keys(VEHICLE_TYPE_LABELS) as VehicleType[]).map((vt) => (
@@ -348,16 +436,32 @@ export default function PenyewaDashboardPage() {
                 <input
                   type="text"
                   required
-                  disabled={!isApproved}
+                  disabled={!isApproved || submitting}
                   value={vehicleBrand}
-                  onChange={(e) => setVehicleBrand(e.target.value)}
+                  onChange={(e) => {
+                    setVehicleBrand(e.target.value);
+                    if (fieldErrors.vehicleBrand && e.target.value.trim()) {
+                      setFieldErrors((prev) => ({
+                        ...prev,
+                        vehicleBrand: undefined,
+                      }));
+                    }
+                  }}
                   placeholder="Contoh: Hyundai Ioniq 5 / Honda Beat"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none disabled:bg-slate-100"
+                  className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none disabled:bg-slate-100 ${
+                    fieldErrors.vehicleBrand
+                      ? 'border-rose-400 focus:border-rose-500'
+                      : 'border-slate-300 focus:border-blue-500'
+                  }`}
                 />
+                {fieldErrors.vehicleBrand && (
+                  <p className="mt-1 text-xs font-medium text-rose-600">
+                    {fieldErrors.vehicleBrand}
+                  </p>
+                )}
               </div>
             </div>
 
-            {/* Nomor Plat (Disembunyikan jika sepeda) */}
             {vehicleType !== 'sepeda' && (
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">
@@ -366,16 +470,32 @@ export default function PenyewaDashboardPage() {
                 <input
                   type="text"
                   required
-                  disabled={!isApproved}
+                  disabled={!isApproved || submitting}
                   value={licensePlate}
-                  onChange={(e) => setLicensePlate(e.target.value)}
+                  onChange={(e) => {
+                    setLicensePlate(e.target.value);
+                    if (fieldErrors.licensePlate && e.target.value.trim()) {
+                      setFieldErrors((prev) => ({
+                        ...prev,
+                        licensePlate: undefined,
+                      }));
+                    }
+                  }}
                   placeholder="Contoh: B 1234 XYZ"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm uppercase focus:border-blue-500 focus:outline-none disabled:bg-slate-100"
+                  className={`w-full rounded-lg border px-3 py-2 text-sm uppercase focus:outline-none disabled:bg-slate-100 ${
+                    fieldErrors.licensePlate
+                      ? 'border-rose-400 focus:border-rose-500'
+                      : 'border-slate-300 focus:border-blue-500'
+                  }`}
                 />
+                {fieldErrors.licensePlate && (
+                  <p className="mt-1 text-xs font-medium text-rose-600">
+                    {fieldErrors.licensePlate}
+                  </p>
+                )}
               </div>
             )}
 
-            {/* Input Khusus Mobil Listrik */}
             {vehicleType === 'mobil_listrik' && (
               <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4">
                 <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-amber-900">
@@ -392,11 +512,27 @@ export default function PenyewaDashboardPage() {
                       step="0.1"
                       min="1"
                       required
-                      disabled={!isApproved}
+                      disabled={!isApproved || submitting}
                       value={maxBatteryKwh}
-                      onChange={(e) => setMaxBatteryKwh(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                      onChange={(e) => {
+                        setMaxBatteryKwh(e.target.value);
+                        setFieldErrors((prev) => ({
+                          ...prev,
+                          maxBatteryKwh: undefined,
+                          currentBatteryKwh: undefined,
+                        }));
+                      }}
+                      className={`w-full rounded-lg border bg-white px-3 py-2 text-sm focus:outline-none ${
+                        fieldErrors.maxBatteryKwh
+                          ? 'border-rose-400 focus:border-rose-500'
+                          : 'border-slate-300 focus:border-blue-500'
+                      }`}
                     />
+                    {fieldErrors.maxBatteryKwh && (
+                      <p className="mt-1 text-xs font-medium text-rose-600">
+                        {fieldErrors.maxBatteryKwh}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-medium text-slate-700">
@@ -407,11 +543,26 @@ export default function PenyewaDashboardPage() {
                       step="0.1"
                       min="0"
                       required
-                      disabled={!isApproved}
+                      disabled={!isApproved || submitting}
                       value={currentBatteryKwh}
-                      onChange={(e) => setCurrentBatteryKwh(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                      onChange={(e) => {
+                        setCurrentBatteryKwh(e.target.value);
+                        setFieldErrors((prev) => ({
+                          ...prev,
+                          currentBatteryKwh: undefined,
+                        }));
+                      }}
+                      className={`w-full rounded-lg border bg-white px-3 py-2 text-sm focus:outline-none ${
+                        fieldErrors.currentBatteryKwh
+                          ? 'border-rose-400 focus:border-rose-500'
+                          : 'border-slate-300 focus:border-blue-500'
+                      }`}
                     />
+                    {fieldErrors.currentBatteryKwh && (
+                      <p className="mt-1 text-xs font-medium text-rose-600">
+                        {fieldErrors.currentBatteryKwh}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <p className="mt-2 text-xs text-amber-800">
@@ -421,7 +572,6 @@ export default function PenyewaDashboardPage() {
               </div>
             )}
 
-            {/* 2. Daftar Garasi Tersedia Sesuai Tipe Kendaraan */}
             <div>
               <label className="mb-2 block text-sm font-medium text-slate-700">
                 Pilih Garasi Tersedia Hari Ini (Kompatibel:{' '}
@@ -453,9 +603,15 @@ export default function PenyewaDashboardPage() {
                           <input
                             type="radio"
                             name="garage"
-                            disabled={!isApproved}
+                            disabled={!isApproved || submitting}
                             checked={active}
-                            onChange={() => setSelectedGarageId(g.id)}
+                            onChange={() => {
+                              setSelectedGarageId(g.id);
+                              setFieldErrors((prev) => ({
+                                ...prev,
+                                selectedGarageId: undefined,
+                              }));
+                            }}
                             className="mt-1"
                           />
                           <div>
@@ -483,9 +639,13 @@ export default function PenyewaDashboardPage() {
                   })}
                 </div>
               )}
+              {fieldErrors.selectedGarageId && (
+                <p className="mt-1 text-xs font-medium text-rose-600">
+                  {fieldErrors.selectedGarageId}
+                </p>
+              )}
             </div>
 
-            {/* 3. Durasi & Tanggal */}
             <div className="grid gap-4 sm:grid-cols-3">
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">
@@ -503,8 +663,14 @@ export default function PenyewaDashboardPage() {
                 </label>
                 <select
                   value={rentalType}
-                  disabled={!isApproved}
-                  onChange={(e) => setRentalType(e.target.value as RentalType)}
+                  disabled={!isApproved || submitting}
+                  onChange={(e) => {
+                    setRentalType(e.target.value as RentalType);
+                    setFieldErrors((prev) => ({
+                      ...prev,
+                      durationDays: undefined,
+                    }));
+                  }}
                   className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none disabled:bg-slate-100"
                 >
                   {(Object.keys(RENTAL_TYPE_LABELS) as RentalType[]).map((rt) => (
@@ -525,11 +691,26 @@ export default function PenyewaDashboardPage() {
                     min={1}
                     max={29}
                     required
-                    disabled={!isApproved}
+                    disabled={!isApproved || submitting}
                     value={durationDays}
-                    onChange={(e) => setDurationDays(Number(e.target.value))}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none disabled:bg-slate-100"
+                    onChange={(e) => {
+                      setDurationDays(Number(e.target.value));
+                      setFieldErrors((prev) => ({
+                        ...prev,
+                        durationDays: undefined,
+                      }));
+                    }}
+                    className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none disabled:bg-slate-100 ${
+                      fieldErrors.durationDays
+                        ? 'border-rose-400 focus:border-rose-500'
+                        : 'border-slate-300 focus:border-blue-500'
+                    }`}
                   />
+                  {fieldErrors.durationDays && (
+                    <p className="mt-1 text-xs font-medium text-rose-600">
+                      {fieldErrors.durationDays}
+                    </p>
+                  )}
                 </div>
               ) : (
                 <div>
@@ -550,7 +731,6 @@ export default function PenyewaDashboardPage() {
               </p>
             )}
 
-            {/* 4. Rincian Biaya Real-Time */}
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
               <div className="mb-2 flex items-center justify-between text-xs text-slate-600">
                 <span>Tanggal Selesai Otomatis</span>
@@ -585,12 +765,17 @@ export default function PenyewaDashboardPage() {
               )}
             </div>
 
-            {/* 5. Upload Bukti Pelunasan */}
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-700">
-                Upload Bukti Pelunasan Biaya (Wajib Gambar)
+                Upload Bukti Pelunasan Biaya (Wajib Gambar, Maks 5 MB)
               </label>
-              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-600 hover:border-blue-400 hover:bg-blue-50/40">
+              <label
+                className={`flex cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-4 text-sm text-slate-600 transition ${
+                  fieldErrors.proofFile
+                    ? 'border-rose-400 bg-rose-50/40'
+                    : 'border-slate-300 bg-slate-50 hover:border-blue-400 hover:bg-blue-50/40'
+                }`}
+              >
                 <Upload className="h-4 w-4 text-blue-600" />
                 <span>
                   {proofFile ? proofFile.name : 'Pilih file gambar bukti bayar...'}
@@ -598,11 +783,18 @@ export default function PenyewaDashboardPage() {
                 <input
                   type="file"
                   accept="image/*"
-                  disabled={!isApproved}
-                  onChange={(e) => setProofFile(e.target.files?.[0] ?? null)}
+                  disabled={!isApproved || submitting}
+                  onChange={(e) =>
+                    handleProofFileChange(e.target.files?.[0] ?? null)
+                  }
                   className="hidden"
                 />
               </label>
+              {fieldErrors.proofFile && (
+                <p className="mt-1 text-xs font-medium text-rose-600">
+                  {fieldErrors.proofFile}
+                </p>
+              )}
             </div>
 
             <button
@@ -620,7 +812,6 @@ export default function PenyewaDashboardPage() {
           </form>
         </section>
 
-        {/* Daftar Sewa Aktif & Riwayat Penyewa */}
         <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-5">
           <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-4">
             <div>
@@ -669,7 +860,7 @@ export default function PenyewaDashboardPage() {
                   <div className="mt-2 font-semibold text-slate-900">
                     {VEHICLE_TYPE_LABELS[r.vehicle_type]} • {r.vehicle_brand}
                     {r.license_plate && (
-                      <span className="ml-1.5 rounded bg-slate-100 px-1.5 py-0.5 text-xs font-mono text-slate-700">
+                      <span className="ml-1.5 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700">
                         {r.license_plate}
                       </span>
                     )}

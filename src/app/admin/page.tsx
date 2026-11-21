@@ -3,21 +3,19 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  AlertCircle,
   CalendarPlus,
   CheckCircle2,
   ExternalLink,
   FileBarChart2,
   PlusSquare,
+  RefreshCw,
   Upload,
   UserCheck,
   XCircle,
 } from 'lucide-react';
+import { AlertBanner } from '@/components/AlertBanner';
 import { useAuth } from '@/context/AuthContext';
-import { AuthService } from '@/services/AuthService';
-import { GarageService } from '@/services/GarageService';
-import { RentalService } from '@/services/RentalService';
-import { StorageService } from '@/services/StorageService';
+import { translateError, validateImageFile } from '@/lib/errors';
 import {
   GARAGE_TYPE_LABELS,
   USER_STATUS_LABELS,
@@ -25,6 +23,10 @@ import {
   formatDateID,
   formatRupiah,
 } from '@/lib/format';
+import { AuthService } from '@/services/AuthService';
+import { GarageService } from '@/services/GarageService';
+import { RentalService } from '@/services/RentalService';
+import { StorageService } from '@/services/StorageService';
 import {
   Garage,
   GarageType,
@@ -40,6 +42,17 @@ const rentalService = new RentalService();
 const storageService = new StorageService();
 
 type AdminTab = 'verify' | 'garages' | 'extend' | 'reports';
+
+interface GarageFormErrors {
+  bulkQuantity?: string;
+  dailyPrice?: string;
+  kwhPrice?: string;
+}
+
+interface ExtendFormErrors {
+  newEndDate?: string;
+  extProofFile?: string;
+}
 
 const MONTH_OPTIONS = [
   { value: 1, label: 'Januari' },
@@ -63,27 +76,28 @@ export default function AdminDashboardPage() {
   const [activeTab, setActiveTab] = useState<AdminTab>('verify');
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [loadingInitial, setLoadingInitial] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  // Tab 1: Verifikasi Pendaftar Baru
   const [tenants, setTenants] = useState<User[]>([]);
   const [tenantStatusFilter, setTenantStatusFilter] = useState<UserStatus | 'all'>(
     'pending'
   );
+  const [verifyingUserId, setVerifyingUserId] = useState<string | null>(null);
 
-  // Tab 2: Kelola & Bulk Create Garasi
   const [garages, setGarages] = useState<Garage[]>([]);
   const [newGarageType, setNewGarageType] = useState<GarageType>('sepeda');
   const [bulkQuantity, setBulkQuantity] = useState<number>(5);
   const [dailyPrice, setDailyPrice] = useState<number>(20000);
   const [kwhPrice, setKwhPrice] = useState<number>(2500);
+  const [garageFieldErrors, setGarageFieldErrors] = useState<GarageFormErrors>({});
 
-  // Tab 3: Perpanjang Status Garasi (Extend)
   const [activeRentals, setActiveRentals] = useState<RentalWithDetails[]>([]);
   const [selectedRentalId, setSelectedRentalId] = useState<string>('');
   const [newEndDate, setNewEndDate] = useState<string>('');
   const [extProofFile, setExtProofFile] = useState<File | null>(null);
+  const [extendFieldErrors, setExtendFieldErrors] = useState<ExtendFormErrors>({});
 
-  // Tab 4: Laporan Sewa Garasi (4 Filter)
   const [allRentals, setAllRentals] = useState<RentalWithDetails[]>([]);
   const [filterYear, setFilterYear] = useState<string>('');
   const [filterMonth, setFilterMonth] = useState<string>('');
@@ -106,9 +120,9 @@ export default function AdminDashboardPage() {
       setActiveRentals(activeList);
       setAllRentals(reportList);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Gagal memuat data dashboard Admin.'
-      );
+      setError(translateError(err, 'Gagal memuat data dashboard Admin.'));
+    } finally {
+      setLoadingInitial(false);
     }
   }, []);
 
@@ -126,7 +140,6 @@ export default function AdminDashboardPage() {
     }
   }, [loading, user, router, loadAllAdminData]);
 
-  // Preview kode incremental berikutnya untuk Bulk Create
   const codePreview = useMemo(() => {
     const existingOfType = garages.filter((g) => g.type === newGarageType);
     const lastCode =
@@ -149,18 +162,16 @@ export default function AdminDashboardPage() {
     } catch (err) {
       return {
         text: '-',
-        error: err instanceof Error ? err.message : 'Jumlah unit tidak valid',
+        error: translateError(err, 'Jumlah unit garasi tidak valid.'),
       };
     }
   }, [garages, newGarageType, bulkQuantity]);
 
-  // Daftar penyewa terfilter untuk Tab 1
   const filteredTenants = useMemo(() => {
     if (tenantStatusFilter === 'all') return tenants;
     return tenants.filter((t) => t.status === tenantStatusFilter);
   }, [tenants, tenantStatusFilter]);
 
-  // Detail sewa aktif terpilih & preview kalkulasi perpanjangan
   const selectedActiveRental = useMemo(
     () => activeRentals.find((r) => r.id === selectedRentalId) ?? null,
     [activeRentals, selectedRentalId]
@@ -181,13 +192,32 @@ export default function AdminDashboardPage() {
       return {
         additionalDays: 0,
         additionalCost: 0,
-        error: err instanceof Error ? err.message : 'Tanggal perpanjangan tidak valid',
+        error: translateError(err, 'Tanggal perpanjangan tidak valid.'),
       };
     }
   }, [selectedActiveRental, newEndDate]);
 
-  // Laporan terfilter dengan 4 filter lengkap
+  const reportFilterErrors = useMemo(() => {
+    const errs: { year?: string; day?: string } = {};
+    if (filterYear) {
+      const y = Number(filterYear);
+      if (!Number.isInteger(y) || y < 2000 || y > 2100) {
+        errs.year = 'Tahun harus berupa angka valid (2000–2100).';
+      }
+    }
+    if (filterDay) {
+      const d = Number(filterDay);
+      if (!Number.isInteger(d) || d < 1 || d > 31) {
+        errs.day = 'Tanggal/hari harus antara 1 sampai 31.';
+      }
+    }
+    return errs;
+  }, [filterYear, filterDay]);
+
   const filteredReportRentals = useMemo(() => {
+    if (reportFilterErrors.year || reportFilterErrors.day) {
+      return [];
+    }
     const criteria: ReportFilterInput = {};
     if (filterYear) criteria.year = Number(filterYear);
     if (filterMonth) criteria.month = Number(filterMonth);
@@ -202,6 +232,7 @@ export default function AdminDashboardPage() {
     filterDay,
     filterGarageType,
     filterUserId,
+    reportFilterErrors,
   ]);
 
   const reportSummary = useMemo(() => {
@@ -224,7 +255,13 @@ export default function AdminDashboardPage() {
     };
   }, [filteredReportRentals]);
 
-  // Actions
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    setError(null);
+    await loadAllAdminData();
+    setRefreshing(false);
+  };
+
   const handleVerifyTenant = async (
     tenantId: string,
     decision: 'approved' | 'rejected'
@@ -232,6 +269,7 @@ export default function AdminDashboardPage() {
     setError(null);
     setSuccessMsg(null);
     setBusy(true);
+    setVerifyingUserId(tenantId);
     try {
       const updated = await authService.verifyTenant(tenantId, decision);
       setSuccessMsg(
@@ -239,18 +277,41 @@ export default function AdminDashboardPage() {
       );
       await loadAllAdminData();
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Gagal memperbarui status penyewa.'
-      );
+      setError(translateError(err, 'Gagal memperbarui status penyewa.'));
     } finally {
       setBusy(false);
+      setVerifyingUserId(null);
     }
+  };
+
+  const validateBulkGarageForm = (): GarageFormErrors => {
+    const errs: GarageFormErrors = {};
+    if (codePreview.error) {
+      errs.bulkQuantity = codePreview.error;
+    }
+    if (!Number.isFinite(dailyPrice) || dailyPrice <= 0) {
+      errs.dailyPrice = 'Harga sewa harian wajib diisi lebih dari 0.';
+    }
+    if (
+      newGarageType === 'mobil_listrik' &&
+      (!Number.isFinite(kwhPrice) || kwhPrice <= 0)
+    ) {
+      errs.kwhPrice = 'Harga isi listrik per kWh wajib diisi lebih dari 0.';
+    }
+    return errs;
   };
 
   const handleBulkCreateGarages = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccessMsg(null);
+
+    const errs = validateBulkGarageForm();
+    setGarageFieldErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      return;
+    }
+
     setBusy(true);
     try {
       const created = await garageService.bulkCreateGarages({
@@ -264,14 +325,26 @@ export default function AdminDashboardPage() {
           created[created.length - 1]?.code
         }).`
       );
+      setGarageFieldErrors({});
       await loadAllAdminData();
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Gagal membuat garasi secara massal.'
-      );
+      setError(translateError(err, 'Gagal membuat garasi secara massal.'));
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleExtProofFileChange = (file: File | null) => {
+    setExtProofFile(file);
+    if (!file) {
+      setExtendFieldErrors((prev) => ({ ...prev, extProofFile: undefined }));
+      return;
+    }
+    const fileErr = validateImageFile(file);
+    setExtendFieldErrors((prev) => ({
+      ...prev,
+      extProofFile: fileErr ?? undefined,
+    }));
   };
 
   const handleExtendRental = async (e: React.FormEvent) => {
@@ -280,8 +353,20 @@ export default function AdminDashboardPage() {
     setError(null);
     setSuccessMsg(null);
 
-    if (!extProofFile) {
-      setError('Admin wajib mengunggah bukti bayar perpanjangan.');
+    const errs: ExtendFormErrors = {};
+    if (!newEndDate) {
+      errs.newEndDate = 'Tanggal selesai baru wajib dipilih.';
+    } else if (extensionPreview.error) {
+      errs.newEndDate = extensionPreview.error;
+    }
+
+    const fileErr = validateImageFile(extProofFile);
+    if (fileErr) {
+      errs.extProofFile = fileErr;
+    }
+
+    setExtendFieldErrors(errs);
+    if (Object.keys(errs).length > 0 || !extProofFile) {
       return;
     }
 
@@ -312,18 +397,21 @@ export default function AdminDashboardPage() {
       );
       setNewEndDate('');
       setExtProofFile(null);
+      setExtendFieldErrors({});
       await loadAllAdminData();
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Gagal memperpanjang masa sewa.'
-      );
+      setError(translateError(err, 'Gagal memperpanjang masa sewa.'));
     } finally {
       setBusy(false);
     }
   };
 
-  if (loading || !user) {
-    return <div className="py-10 text-center text-sm text-slate-500">Memuat dashboard Admin...</div>;
+  if (loading || !user || loadingInitial) {
+    return (
+      <div className="py-10 text-center text-sm text-slate-500">
+        Memuat dashboard Admin...
+      </div>
+    );
   }
 
   const pendingCount = tenants.filter((t) => t.status === 'pending').length;
@@ -338,7 +426,17 @@ export default function AdminDashboardPage() {
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={refreshing || busy}
+            onClick={handleRefresh}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            Segarkan
+          </button>
+
           <button
             type="button"
             onClick={() => setActiveTab('verify')}
@@ -399,20 +497,21 @@ export default function AdminDashboardPage() {
       </div>
 
       {error && (
-        <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-sm text-rose-700">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{error}</span>
-        </div>
+        <AlertBanner
+          variant="error"
+          message={error}
+          onClose={() => setError(null)}
+        />
       )}
 
       {successMsg && (
-        <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3.5 text-sm text-emerald-800">
-          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-          <span>{successMsg}</span>
-        </div>
+        <AlertBanner
+          variant="success"
+          message={successMsg}
+          onClose={() => setSuccessMsg(null)}
+        />
       )}
 
-      {/* TAB 1: VERIFIKASI PENDAFTAR BARU */}
       {activeTab === 'verify' && (
         <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -458,55 +557,58 @@ export default function AdminDashboardPage() {
                     </td>
                   </tr>
                 ) : (
-                  filteredTenants.map((t) => (
-                    <tr key={t.id} className="hover:bg-slate-50/60">
-                      <td className="px-4 py-3 font-mono text-xs">{t.nik ?? '-'}</td>
-                      <td className="px-4 py-3 font-semibold text-slate-900">
-                        {t.full_name}
-                      </td>
-                      <td className="px-4 py-3">{t.phone ?? '-'}</td>
-                      <td className="px-4 py-3">{t.email}</td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                            t.status === 'approved'
-                              ? 'bg-emerald-100 text-emerald-700'
-                              : t.status === 'rejected'
-                              ? 'bg-rose-100 text-rose-700'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {USER_STATUS_LABELS[t.status]}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="inline-flex gap-2">
-                          {t.status !== 'approved' && (
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => handleVerifyTenant(t.id, 'approved')}
-                              className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-                            >
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              Terima
-                            </button>
-                          )}
-                          {t.status !== 'rejected' && (
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => handleVerifyTenant(t.id, 'rejected')}
-                              className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
-                            >
-                              <XCircle className="h-3.5 w-3.5" />
-                              Tolak
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                  filteredTenants.map((t) => {
+                    const isRowBusy = busy && verifyingUserId === t.id;
+                    return (
+                      <tr key={t.id} className="hover:bg-slate-50/60">
+                        <td className="px-4 py-3 font-mono text-xs">{t.nik ?? '-'}</td>
+                        <td className="px-4 py-3 font-semibold text-slate-900">
+                          {t.full_name}
+                        </td>
+                        <td className="px-4 py-3">{t.phone ?? '-'}</td>
+                        <td className="px-4 py-3">{t.email}</td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                              t.status === 'approved'
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : t.status === 'rejected'
+                                ? 'bg-rose-100 text-rose-700'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {USER_STATUS_LABELS[t.status]}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="inline-flex gap-2">
+                            {t.status !== 'approved' && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleVerifyTenant(t.id, 'approved')}
+                                className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                              >
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                {isRowBusy ? 'Memproses...' : 'Terima'}
+                              </button>
+                            )}
+                            {t.status !== 'rejected' && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleVerifyTenant(t.id, 'rejected')}
+                                className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                              >
+                                <XCircle className="h-3.5 w-3.5" />
+                                {isRowBusy ? 'Memproses...' : 'Tolak'}
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -514,7 +616,6 @@ export default function AdminDashboardPage() {
         </section>
       )}
 
-      {/* TAB 2: BUAT GARASI BARU (BULK CREATE) */}
       {activeTab === 'garages' && (
         <div className="grid gap-6 lg:grid-cols-12">
           <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-5">
@@ -525,15 +626,23 @@ export default function AdminDashboardPage() {
               Kode otomatis incremental (S001, C001, E001), maks 999 unit per tipe.
             </p>
 
-            <form onSubmit={handleBulkCreateGarages} className="space-y-4">
+            <form
+              onSubmit={handleBulkCreateGarages}
+              noValidate
+              className="space-y-4"
+            >
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">
                   Tipe Garasi
                 </label>
                 <select
                   value={newGarageType}
-                  onChange={(e) => setNewGarageType(e.target.value as GarageType)}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                  disabled={busy}
+                  onChange={(e) => {
+                    setNewGarageType(e.target.value as GarageType);
+                    setGarageFieldErrors({});
+                  }}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm disabled:bg-slate-100"
                 >
                   <option value="sepeda">Sepeda (Prefix S)</option>
                   <option value="mobil">Mobil (Prefix C)</option>
@@ -550,17 +659,28 @@ export default function AdminDashboardPage() {
                   min={1}
                   max={999}
                   required
+                  disabled={busy}
                   value={bulkQuantity}
-                  onChange={(e) => setBulkQuantity(Number(e.target.value))}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  onChange={(e) => {
+                    setBulkQuantity(Number(e.target.value));
+                    setGarageFieldErrors((prev) => ({
+                      ...prev,
+                      bulkQuantity: undefined,
+                    }));
+                  }}
+                  className={`w-full rounded-lg border px-3 py-2 text-sm disabled:bg-slate-100 ${
+                    codePreview.error || garageFieldErrors.bulkQuantity
+                      ? 'border-rose-400'
+                      : 'border-slate-300'
+                  }`}
                 />
                 <p className="mt-1 text-xs text-slate-600">
                   Preview Kode Baru:{' '}
                   <strong className="text-blue-700">{codePreview.text}</strong>
                 </p>
-                {codePreview.error && (
+                {(codePreview.error || garageFieldErrors.bulkQuantity) && (
                   <p className="mt-1 text-xs font-medium text-rose-600">
-                    {codePreview.error}
+                    {codePreview.error || garageFieldErrors.bulkQuantity}
                   </p>
                 )}
               </div>
@@ -574,10 +694,26 @@ export default function AdminDashboardPage() {
                   min={1000}
                   step={500}
                   required
+                  disabled={busy}
                   value={dailyPrice}
-                  onChange={(e) => setDailyPrice(Number(e.target.value))}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  onChange={(e) => {
+                    setDailyPrice(Number(e.target.value));
+                    setGarageFieldErrors((prev) => ({
+                      ...prev,
+                      dailyPrice: undefined,
+                    }));
+                  }}
+                  className={`w-full rounded-lg border px-3 py-2 text-sm disabled:bg-slate-100 ${
+                    garageFieldErrors.dailyPrice
+                      ? 'border-rose-400'
+                      : 'border-slate-300'
+                  }`}
                 />
+                {garageFieldErrors.dailyPrice && (
+                  <p className="mt-1 text-xs font-medium text-rose-600">
+                    {garageFieldErrors.dailyPrice}
+                  </p>
+                )}
               </div>
 
               {newGarageType === 'mobil_listrik' && (
@@ -590,17 +726,33 @@ export default function AdminDashboardPage() {
                     min={100}
                     step={100}
                     required
+                    disabled={busy}
                     value={kwhPrice}
-                    onChange={(e) => setKwhPrice(Number(e.target.value))}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    onChange={(e) => {
+                      setKwhPrice(Number(e.target.value));
+                      setGarageFieldErrors((prev) => ({
+                        ...prev,
+                        kwhPrice: undefined,
+                      }));
+                    }}
+                    className={`w-full rounded-lg border px-3 py-2 text-sm disabled:bg-slate-100 ${
+                      garageFieldErrors.kwhPrice
+                        ? 'border-rose-400'
+                        : 'border-slate-300'
+                    }`}
                   />
+                  {garageFieldErrors.kwhPrice && (
+                    <p className="mt-1 text-xs font-medium text-rose-600">
+                      {garageFieldErrors.kwhPrice}
+                    </p>
+                  )}
                 </div>
               )}
 
               <button
                 type="submit"
                 disabled={busy || Boolean(codePreview.error)}
-                className="w-full rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
+                className="w-full rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {busy ? 'Menyimpan...' : 'Buat Unit Garasi'}
               </button>
@@ -665,7 +817,6 @@ export default function AdminDashboardPage() {
         </div>
       )}
 
-      {/* TAB 3: PERPANJANG STATUS GARASI (EXTEND) */}
       {activeTab === 'extend' && (
         <div className="grid gap-6 lg:grid-cols-12">
           <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-6">
@@ -691,6 +842,7 @@ export default function AdminDashboardPage() {
                       onClick={() => {
                         setSelectedRentalId(r.id);
                         setNewEndDate('');
+                        setExtendFieldErrors({});
                       }}
                       className={`w-full rounded-xl border p-4 text-left transition ${
                         selected
@@ -740,7 +892,7 @@ export default function AdminDashboardPage() {
                 Silakan pilih salah satu garasi aktif di sebelah kiri terlebih dahulu.
               </div>
             ) : (
-              <form onSubmit={handleExtendRental} className="space-y-4">
+              <form onSubmit={handleExtendRental} noValidate className="space-y-4">
                 <div className="rounded-xl bg-slate-50 p-4 text-sm">
                   <div className="font-bold text-slate-900">
                     Garasi {selectedActiveRental.garage?.code} —{' '}
@@ -768,11 +920,27 @@ export default function AdminDashboardPage() {
                   <input
                     type="date"
                     required
+                    disabled={busy}
                     min={selectedActiveRental.end_date}
                     value={newEndDate}
-                    onChange={(e) => setNewEndDate(e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    onChange={(e) => {
+                      setNewEndDate(e.target.value);
+                      setExtendFieldErrors((prev) => ({
+                        ...prev,
+                        newEndDate: undefined,
+                      }));
+                    }}
+                    className={`w-full rounded-lg border px-3 py-2 text-sm disabled:bg-slate-100 ${
+                      extendFieldErrors.newEndDate || extensionPreview.error
+                        ? 'border-rose-400'
+                        : 'border-slate-300'
+                    }`}
                   />
+                  {extendFieldErrors.newEndDate && (
+                    <p className="mt-1 text-xs font-medium text-rose-600">
+                      {extendFieldErrors.newEndDate}
+                    </p>
+                  )}
                 </div>
 
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
@@ -797,9 +965,15 @@ export default function AdminDashboardPage() {
 
                 <div>
                   <label className="mb-1 block text-sm font-medium text-slate-700">
-                    Upload Bukti Bayar Perpanjangan (Wajib)
+                    Upload Bukti Bayar Perpanjangan (Wajib Gambar, Maks 5 MB)
                   </label>
-                  <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-600 hover:border-blue-400">
+                  <label
+                    className={`flex cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-4 text-sm text-slate-600 ${
+                      extendFieldErrors.extProofFile
+                        ? 'border-rose-400 bg-rose-50/40'
+                        : 'border-slate-300 bg-slate-50 hover:border-blue-400'
+                    }`}
+                  >
                     <Upload className="h-4 w-4 text-blue-600" />
                     <span>
                       {extProofFile
@@ -809,12 +983,18 @@ export default function AdminDashboardPage() {
                     <input
                       type="file"
                       accept="image/*"
+                      disabled={busy}
                       onChange={(e) =>
-                        setExtProofFile(e.target.files?.[0] ?? null)
+                        handleExtProofFileChange(e.target.files?.[0] ?? null)
                       }
                       className="hidden"
                     />
                   </label>
+                  {extendFieldErrors.extProofFile && (
+                    <p className="mt-1 text-xs font-medium text-rose-600">
+                      {extendFieldErrors.extProofFile}
+                    </p>
+                  )}
                 </div>
 
                 <button
@@ -822,7 +1002,7 @@ export default function AdminDashboardPage() {
                   disabled={
                     busy || !newEndDate || Boolean(extensionPreview.error)
                   }
-                  className="w-full rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
+                  className="w-full rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {busy ? 'Menyimpan Perpanjangan...' : 'Simpan Perpanjangan Sewa'}
                 </button>
@@ -832,7 +1012,6 @@ export default function AdminDashboardPage() {
         </div>
       )}
 
-      {/* TAB 4: LAPORAN SEWA GARASI (4 FILTER LENGKAP) */}
       {activeTab === 'reports' && (
         <section className="space-y-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -860,7 +1039,6 @@ export default function AdminDashboardPage() {
             </button>
           </div>
 
-          {/* 4 Filter Controls */}
           <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2 lg:grid-cols-5">
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-600">
@@ -871,8 +1049,15 @@ export default function AdminDashboardPage() {
                 placeholder="Semua Tahun (2026)"
                 value={filterYear}
                 onChange={(e) => setFilterYear(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm"
+                className={`w-full rounded-lg border bg-white px-3 py-1.5 text-sm ${
+                  reportFilterErrors.year ? 'border-rose-400' : 'border-slate-300'
+                }`}
               />
+              {reportFilterErrors.year && (
+                <p className="mt-1 text-[11px] font-medium text-rose-600">
+                  {reportFilterErrors.year}
+                </p>
+              )}
             </div>
 
             <div>
@@ -904,8 +1089,15 @@ export default function AdminDashboardPage() {
                 placeholder="1 - 31"
                 value={filterDay}
                 onChange={(e) => setFilterDay(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm"
+                className={`w-full rounded-lg border bg-white px-3 py-1.5 text-sm ${
+                  reportFilterErrors.day ? 'border-rose-400' : 'border-slate-300'
+                }`}
               />
+              {reportFilterErrors.day && (
+                <p className="mt-1 text-[11px] font-medium text-rose-600">
+                  {reportFilterErrors.day}
+                </p>
+              )}
             </div>
 
             <div>
@@ -943,7 +1135,6 @@ export default function AdminDashboardPage() {
             </div>
           </div>
 
-          {/* Summary KPI */}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-xl border border-slate-200 p-4">
               <div className="text-xs text-slate-500">Total Transaksi</div>
@@ -977,7 +1168,6 @@ export default function AdminDashboardPage() {
             </div>
           </div>
 
-          {/* Tabel Laporan */}
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-left text-sm">
               <thead>

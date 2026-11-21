@@ -1,7 +1,3 @@
-/**
- * @fileoverview Definisi tipe domain dan DTO untuk Sistem Penyewaan Garasi Kendaraan.
- */
-
 export type UserRole = 'admin' | 'penyewa';
 
 export type UserStatus = 'pending' | 'approved' | 'rejected';
@@ -16,9 +12,6 @@ export type RentalType = 'harian' | 'bulanan';
 
 export type RentalStatus = 'active' | 'completed';
 
-/**
- * Representasi entitas pengguna (Admin atau Penyewa) pada tabel `users`.
- */
 export interface User {
   id: string;
   nik: string | null;
@@ -31,9 +24,6 @@ export interface User {
   created_at: string;
 }
 
-/**
- * Representasi entitas unit garasi pada tabel `garages`.
- */
 export interface Garage {
   id: string;
   code: string;
@@ -44,9 +34,6 @@ export interface Garage {
   created_at: string;
 }
 
-/**
- * Representasi transaksi persewaan pada tabel `rentals`.
- */
 export interface Rental {
   id: string;
   user_id: string;
@@ -68,9 +55,6 @@ export interface Rental {
   created_at: string;
 }
 
-/**
- * Representasi data perpanjangan sewa pada tabel `rental_extensions`.
- */
 export interface RentalExtension {
   id: string;
   rental_id: string;
@@ -83,29 +67,21 @@ export interface RentalExtension {
   created_at: string;
 }
 
-/**
- * Data transaksi sewa beserta relasi penyewa, garasi, dan riwayat perpanjangan.
- */
 export interface RentalWithDetails extends Rental {
   user?: Pick<User, 'id' | 'nik' | 'full_name' | 'phone' | 'email' | 'status'>;
   garage?: Pick<Garage, 'id' | 'code' | 'type' | 'daily_price' | 'kwh_price' | 'status'>;
   extensions?: RentalExtension[];
 }
 
-/**
- * Input pendaftaran penyewa baru.
- */
 export interface RegisterInput {
   nik: string;
   fullName: string;
   phone: string;
   email: string;
   password: string;
+  confirmPassword?: string;
 }
 
-/**
- * Input pembuatan unit garasi secara massal (bulk create) oleh Admin.
- */
 export interface BulkCreateGarageInput {
   type: GarageType;
   quantity: number;
@@ -113,9 +89,6 @@ export interface BulkCreateGarageInput {
   kwhPrice?: number;
 }
 
-/**
- * Input pembuatan transaksi sewa baru oleh Penyewa.
- */
 export interface CreateRentalInput {
   userId: string;
   garageId: string;
@@ -130,9 +103,6 @@ export interface CreateRentalInput {
   paymentProofUrl: string;
 }
 
-/**
- * Input perpanjangan tanggal selesai sewa oleh Admin.
- */
 export interface ExtendRentalInput {
   rentalId: string;
   newEndDate: string;
@@ -140,9 +110,6 @@ export interface ExtendRentalInput {
   adminId: string;
 }
 
-/**
- * Filter laporan persewaan garasi pada dashboard Admin.
- */
 export interface ReportFilterInput {
   year?: number;
   month?: number; // 1 - 12
@@ -152,9 +119,6 @@ export interface ReportFilterInput {
   userId?: string;
 }
 
-/**
- * Rincian perhitungan biaya sewa dan biaya isi listrik.
- */
 export interface CostBreakdown {
   rentalCost: number;
   electricityCost: number;
