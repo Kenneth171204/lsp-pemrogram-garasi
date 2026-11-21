@@ -142,3 +142,9 @@ CREATE POLICY "Public update payment-proofs"
 CREATE POLICY "Public delete payment-proofs"
   ON storage.objects FOR DELETE
   USING (bucket_id = 'payment-proofs');
+
+-- ============================================================================
+-- 9. REFRESH POSTGREST SCHEMA CACHE
+-- ============================================================================
+NOTIFY pgrst, 'reload schema';
+
