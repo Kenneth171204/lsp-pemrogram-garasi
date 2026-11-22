@@ -8,6 +8,7 @@ Aplikasi web untuk manajemen penyewaan garasi kendaraan (Sepeda, Mobil, dan Mobi
 - **Styling & UI:** Tailwind CSS, Lucide React
 - **Database & Storage:** Supabase (PostgreSQL & Storage Bucket)
 - **Unit Testing:** Vitest
+- - **Arsitektur:** MVC (Model: Supabase & Types, View: Next.js UI, Controller: OOP Service Layer)
 
 ## Fitur Utama
 
@@ -27,7 +28,7 @@ Aplikasi web untuk manajemen penyewaan garasi kendaraan (Sepeda, Mobil, dan Mobi
 
 ### 1. Clone & Install Dependencies
 ```bash
-git clone [https://github.com/Kenneth171204/lsp-pemrogram-garasi.git](https://github.com/Kenneth171204/lsp-pemrogram-garasi.git)
+git clone https://github.com/Kenneth171204/lsp-pemrogram-garasi.git
 cd lsp-pemrogram-garasi
 npm install
 ```
