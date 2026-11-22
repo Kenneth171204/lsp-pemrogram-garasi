@@ -14,7 +14,7 @@ Aplikasi web untuk manajemen penyewaan garasi kendaraan (Sepeda, Mobil, dan Mobi
 ### Penyewa
 - Registrasi akun (wajib email `@gmail.com`, validasi NIK, password min. 6 karakter & konfirmasi password) dengan status awal `pending`.
 - Sewa garasi baru sesuai kompatibilitas kendaraan (`S` untuk Sepeda/Motor, `C` untuk Mobil/EV, `E` untuk EV).
-- Perhitungan otomatis sewa harian (1–29 hari), bulanan (25x tarif harian), dan biaya listrik EV `(max_battery - current_battery) * tarif_kwh` khusus di Garasi `E`.
+- Perhitungan otomatis sewa harian dinamis (maks. total hari dalam bulan - 1), bulanan (25x tarif harian), dan biaya listrik EV `(max_battery - current_battery) * tarif_kwh` khusus di Garasi `E`.
 - Upload bukti pembayaran (maks. 5 MB) dan riwayat sewa aktif.
 
 ### Admin
@@ -52,7 +52,7 @@ Buka `http://localhost:3000` di browser.
 ```bash
 npm run test
 ```
-Seluruh unit test (`auth.service.test.ts`, `garage.service.test.ts`, `rental.service.test.ts`) akan dijalankan menggunakan Vitest (34/34 test cases PASS).
+Seluruh unit test (`auth.service.test.ts`, `garage.service.test.ts`, `rental.service.test.ts`) akan dijalankan menggunakan Vitest (38/38 test cases PASS).
 
 ## Akun Admin Default
 - **Email:** `admin@garasi.com`
