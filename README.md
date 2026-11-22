@@ -8,7 +8,7 @@ Aplikasi web untuk manajemen penyewaan garasi kendaraan (Sepeda, Mobil, dan Mobi
 - **Styling & UI:** Tailwind CSS, Lucide React
 - **Database & Storage:** Supabase (PostgreSQL & Storage Bucket)
 - **Unit Testing:** Vitest
-- - **Arsitektur:** MVC (Model: Supabase & Types, View: Next.js UI, Controller: OOP Service Layer)
+- **Arsitektur:** MVC (Model: Supabase & Types, View: Next.js UI, Controller: OOP Service Layer)
 
 ## Fitur Utama
 
