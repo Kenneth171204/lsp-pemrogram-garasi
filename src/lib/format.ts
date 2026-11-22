@@ -37,7 +37,7 @@ export const VEHICLE_TYPE_LABELS: Record<VehicleType, string> = {
 };
 
 export const RENTAL_TYPE_LABELS: Record<RentalType, string> = {
-  harian: 'Harian (1-29 Hari)',
+  harian: 'Harian (< 1 Bulan)',
   bulanan: 'Bulanan (Maks 1 Bulan)',
 };
 

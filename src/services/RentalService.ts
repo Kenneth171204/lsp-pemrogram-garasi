@@ -18,7 +18,6 @@ import {
 } from '@/types';
 
 export class RentalService {
-  public static readonly MAX_DAILY_RENTAL_DAYS = 29;
   public static readonly MONTHLY_PRICE_MULTIPLIER = 25;
   public static readonly MONTHLY_DURATION_DAYS = 30;
 
@@ -36,7 +35,7 @@ export class RentalService {
     this.garageService = garageService ?? new GarageService(this.db);
   }
 
-  public getTodayDateISO(): string {
+  public static getTodayDateISO(): string {
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -44,8 +43,12 @@ export class RentalService {
     return `${year}-${month}-${day}`;
   }
 
+  public getTodayDateISO(): string {
+    return RentalService.getTodayDateISO();
+  }
+
   // Parsing komponen tanggal via UTC agar kalender tidak tergeser timezone lokal
-  private parseDateParts(dateInput: string | Date): {
+  private static parseDateParts(dateInput: string | Date): {
     year: number;
     month: number;
     day: number;
@@ -81,6 +84,32 @@ export class RentalService {
     }
 
     return { year, month, day };
+  }
+
+  private parseDateParts(dateInput: string | Date): {
+    year: number;
+    month: number;
+    day: number;
+  } {
+    return RentalService.parseDateParts(dateInput);
+  }
+
+  public static getDaysInMonth(dateStr: string | Date): number {
+    const { year, month } = RentalService.parseDateParts(dateStr);
+    return new Date(year, month, 0).getDate();
+  }
+
+  public getDaysInMonth(dateStr: string | Date): number {
+    return RentalService.getDaysInMonth(dateStr);
+  }
+
+  public static getMaxDailyDuration(startDate?: string | Date): number {
+    const targetDate = startDate ?? RentalService.getTodayDateISO();
+    return RentalService.getDaysInMonth(targetDate) - 1;
+  }
+
+  public getMaxDailyDuration(startDate?: string | Date): number {
+    return RentalService.getMaxDailyDuration(startDate);
   }
 
   private formatUTCDate(date: Date): string {
@@ -142,15 +171,19 @@ export class RentalService {
     }
   }
 
-  public validateDuration(rentalType: RentalType, durationValue: number): void {
+  public validateDuration(
+    rentalType: RentalType,
+    durationValue: number,
+    startDate?: string | Date
+  ): void {
     if (rentalType === 'harian') {
-      if (
-        !Number.isInteger(durationValue) ||
-        durationValue < 1 ||
-        durationValue > RentalService.MAX_DAILY_RENTAL_DAYS
-      ) {
+      const maxDays = this.getMaxDailyDuration(startDate);
+      if (!Number.isInteger(durationValue) || durationValue < 1) {
+        throw new Error('Durasi sewa harian minimal 1 hari.');
+      }
+      if (durationValue > maxDays) {
         throw new Error(
-          `Sewa harian hanya diperbolehkan antara 1 hingga ${RentalService.MAX_DAILY_RENTAL_DAYS} hari (kurang dari 30 hari).`
+          `Durasi sewa harian maksimal adalah ${maxDays} hari untuk bulan ini (total hari bulan - 1).`
         );
       }
       return;
@@ -173,7 +206,8 @@ export class RentalService {
   public calculateRentalCost(
     rentalType: RentalType,
     dailyPrice: number,
-    durationDays?: number
+    durationDays?: number,
+    startDate?: string | Date
   ): number {
     if (!Number.isFinite(dailyPrice) || dailyPrice < 0) {
       throw new Error('Harga sewa harian tidak valid.');
@@ -181,7 +215,7 @@ export class RentalService {
 
     if (rentalType === 'harian') {
       const days = durationDays ?? 0;
-      this.validateDuration('harian', days);
+      this.validateDuration('harian', days, startDate);
       return days * dailyPrice;
     }
 
@@ -226,6 +260,7 @@ export class RentalService {
     rentalType: RentalType;
     dailyPrice: number;
     durationDays?: number;
+    startDate?: string | Date;
     vehicleType: VehicleType;
     garageType: GarageType;
     maxBatteryKwh?: number | null;
@@ -235,7 +270,8 @@ export class RentalService {
     const rentalCost = this.calculateRentalCost(
       params.rentalType,
       params.dailyPrice,
-      params.durationDays
+      params.durationDays,
+      params.startDate
     );
     const electricityCost = this.calculateElectricityCost({
       vehicleType: params.vehicleType,
@@ -261,7 +297,7 @@ export class RentalService {
 
     if (rentalType === 'harian') {
       const days = durationDays ?? 0;
-      this.validateDuration('harian', days);
+      this.validateDuration('harian', days, startDate);
       const endUtc = new Date(Date.UTC(year, month - 1, day + days));
       return this.formatUTCDate(endUtc);
     }
@@ -409,6 +445,7 @@ export class RentalService {
           input.rentalType === 'bulanan'
             ? RentalService.MONTHLY_DURATION_DAYS
             : durationDays,
+        startDate,
         vehicleType: input.vehicleType,
         garageType: garage.type,
         maxBatteryKwh: input.maxBatteryKwh,

@@ -72,6 +72,10 @@ export default function PenyewaDashboardPage() {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const todayISO = useMemo(() => rentalService.getTodayDateISO(), []);
+  const maxDailyDays = useMemo(
+    () => RentalService.getMaxDailyDuration(todayISO),
+    [todayISO]
+  );
 
   const loadGaragesForVehicle = useCallback(async (vType: VehicleType) => {
     try {
@@ -141,6 +145,7 @@ export default function PenyewaDashboardPage() {
         rentalType,
         dailyPrice: Number(selectedGarage.daily_price),
         durationDays: daysParam,
+        startDate: todayISO,
         vehicleType,
         garageType: selectedGarage.type,
         maxBatteryKwh: maxKwh,
@@ -200,12 +205,10 @@ export default function PenyewaDashboardPage() {
     }
 
     if (rentalType === 'harian') {
-      if (
-        !Number.isInteger(durationDays) ||
-        durationDays < 1 ||
-        durationDays > RentalService.MAX_DAILY_RENTAL_DAYS
-      ) {
-        errs.durationDays = `Sewa harian harus antara 1 hingga ${RentalService.MAX_DAILY_RENTAL_DAYS} hari.`;
+      if (!Number.isInteger(durationDays) || durationDays < 1) {
+        errs.durationDays = 'Durasi sewa harian minimal 1 hari.';
+      } else if (durationDays > maxDailyDays) {
+        errs.durationDays = `Durasi sewa harian maksimal adalah ${maxDailyDays} hari untuk bulan ini (total hari bulan - 1).`;
       }
     }
 
@@ -263,7 +266,8 @@ export default function PenyewaDashboardPage() {
       });
       rentalService.validateDuration(
         rentalType,
-        rentalType === 'bulanan' ? 30 : durationDays
+        rentalType === 'bulanan' ? 30 : durationDays,
+        todayISO
       );
 
       const proofUrl = await storageService.uploadPaymentProof(
@@ -675,7 +679,9 @@ export default function PenyewaDashboardPage() {
                 >
                   {(Object.keys(RENTAL_TYPE_LABELS) as RentalType[]).map((rt) => (
                     <option key={rt} value={rt}>
-                      {RENTAL_TYPE_LABELS[rt]}
+                      {rt === 'harian'
+                        ? `Harian (1–${maxDailyDays} Hari)`
+                        : RENTAL_TYPE_LABELS[rt]}
                     </option>
                   ))}
                 </select>
@@ -684,12 +690,12 @@ export default function PenyewaDashboardPage() {
               {rentalType === 'harian' ? (
                 <div>
                   <label className="mb-1 block text-sm font-medium text-slate-700">
-                    Jumlah Hari (1–29)
+                    Jumlah Hari (1–{maxDailyDays})
                   </label>
                   <input
                     type="number"
                     min={1}
-                    max={29}
+                    max={maxDailyDays}
                     required
                     disabled={!isApproved || submitting}
                     value={durationDays}
@@ -706,9 +712,13 @@ export default function PenyewaDashboardPage() {
                         : 'border-slate-300 focus:border-blue-500'
                     }`}
                   />
-                  {fieldErrors.durationDays && (
+                  {fieldErrors.durationDays ? (
                     <p className="mt-1 text-xs font-medium text-rose-600">
                       {fieldErrors.durationDays}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Maks {maxDailyDays} hari untuk bulan ini (total hari bulan - 1).
                     </p>
                   )}
                 </div>

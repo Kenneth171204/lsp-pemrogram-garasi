@@ -6,25 +6,95 @@ describe('RentalService - Validasi Durasi, Biaya Sewa, Listrik EV, Tanggal & Lap
   const rentalService = new RentalService();
 
   describe('Validasi Batas Durasi & Perhitungan Biaya Sewa (Harian & Bulanan)', () => {
-    it('sewa harian menerima durasi 1 sampai 29 hari dan menghitung biaya jumlah_hari * daily_price', () => {
+    it('menghitung jumlah hari dalam bulan dan batas maksimal sewa harian secara dinamis', () => {
+      // Februari non-kabisat (28 hari -> maks 27 hari)
+      expect(RentalService.getDaysInMonth('2026-02-10')).toBe(28);
+      expect(RentalService.getMaxDailyDuration('2026-02-10')).toBe(27);
+
+      // Februari kabisat (29 hari -> maks 28 hari)
+      expect(RentalService.getDaysInMonth('2024-02-10')).toBe(29);
+      expect(RentalService.getMaxDailyDuration('2024-02-10')).toBe(28);
+
+      // Bulan 30 hari (November -> maks 29 hari)
+      expect(RentalService.getDaysInMonth('2026-11-21')).toBe(30);
+      expect(RentalService.getMaxDailyDuration('2026-11-21')).toBe(29);
+
+      // Bulan 31 hari (Desember / Januari -> maks 30 hari)
+      expect(RentalService.getDaysInMonth('2026-12-05')).toBe(31);
+      expect(RentalService.getMaxDailyDuration('2026-12-05')).toBe(30);
+      expect(RentalService.getDaysInMonth('2026-01-15')).toBe(31);
+      expect(RentalService.getMaxDailyDuration('2026-01-15')).toBe(30);
+    });
+
+    it('sewa harian pada bulan 28 hari (Februari) menerima maks 27 hari dan menolak >= 28 hari', () => {
+      const febStart = '2026-02-05';
+      expect(() => rentalService.validateDuration('harian', 1, febStart)).not.toThrow();
+      expect(() => rentalService.validateDuration('harian', 27, febStart)).not.toThrow();
+      expect(
+        rentalService.calculateRentalCost('harian', 50000, 27, febStart)
+      ).toBe(1350000);
+
+      expect(() => rentalService.validateDuration('harian', 28, febStart)).toThrow(
+        /maksimal adalah 27 hari/i
+      );
+      expect(() =>
+        rentalService.calculateRentalCost('harian', 50000, 28, febStart)
+      ).toThrow(/maksimal adalah 27 hari/i);
+    });
+
+    it('sewa harian pada bulan kabisat 29 hari (Februari 2024) menerima maks 28 hari dan menolak >= 29 hari', () => {
+      const leapFebStart = '2024-02-01';
+      expect(() =>
+        rentalService.validateDuration('harian', 28, leapFebStart)
+      ).not.toThrow();
+      expect(() =>
+        rentalService.validateDuration('harian', 29, leapFebStart)
+      ).toThrow(/maksimal adalah 28 hari/i);
+    });
+
+    it('sewa harian pada bulan 30 hari (November) menerima maks 29 hari dan menolak >= 30 hari', () => {
+      const novStart = '2026-11-21';
+      expect(() => rentalService.validateDuration('harian', 29, novStart)).not.toThrow();
+      expect(
+        rentalService.calculateRentalCost('harian', 50000, 29, novStart)
+      ).toBe(1450000);
+
+      expect(() => rentalService.validateDuration('harian', 30, novStart)).toThrow(
+        /maksimal adalah 29 hari/i
+      );
+      expect(() =>
+        rentalService.calculateRentalCost('harian', 50000, 30, novStart)
+      ).toThrow(/maksimal adalah 29 hari/i);
+    });
+
+    it('sewa harian pada bulan 31 hari (Desember) menerima maks 30 hari dan menolak >= 31 hari', () => {
+      const decStart = '2026-12-10';
+      expect(() => rentalService.validateDuration('harian', 30, decStart)).not.toThrow();
+      expect(
+        rentalService.calculateRentalCost('harian', 50000, 30, decStart)
+      ).toBe(1500000);
+
+      expect(() => rentalService.validateDuration('harian', 31, decStart)).toThrow(
+        /maksimal adalah 30 hari/i
+      );
+      expect(() =>
+        rentalService.calculateRentalCost('harian', 50000, 31, decStart)
+      ).toThrow(/maksimal adalah 30 hari/i);
+    });
+
+    it('sewa harian menggunakan bulan hari ini jika startDate tidak diisi dan menolak durasi <= 0', () => {
+      const todayMax = RentalService.getMaxDailyDuration();
       expect(() => rentalService.validateDuration('harian', 1)).not.toThrow();
-      expect(() => rentalService.validateDuration('harian', 29)).not.toThrow();
+      expect(() => rentalService.validateDuration('harian', todayMax)).not.toThrow();
+      expect(() =>
+        rentalService.validateDuration('harian', todayMax + 1)
+      ).toThrow();
 
       expect(rentalService.calculateRentalCost('harian', 50000, 1)).toBe(50000);
       expect(rentalService.calculateRentalCost('harian', 50000, 10)).toBe(500000);
-      expect(rentalService.calculateRentalCost('harian', 50000, 29)).toBe(
-        1450000
-      );
-    });
 
-    it('sewa harian menolak durasi 0, negatif, atau >= 30 hari', () => {
       expect(() => rentalService.validateDuration('harian', 0)).toThrow();
       expect(() => rentalService.validateDuration('harian', -3)).toThrow();
-      expect(() => rentalService.validateDuration('harian', 30)).toThrow();
-      expect(() => rentalService.validateDuration('harian', 45)).toThrow();
-      expect(() =>
-        rentalService.calculateRentalCost('harian', 50000, 30)
-      ).toThrow();
     });
 
     it('sewa bulanan maksimal 1 bulan (30 hari) dan menghitung harga 25 * daily_price', () => {

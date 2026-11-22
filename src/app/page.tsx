@@ -113,9 +113,9 @@ export default function HomePage() {
               Sewa Harian &amp; Bulanan Fleksibel
             </h3>
             <p className="mt-1 text-sm text-slate-600">
-              Sewa harian berlaku 1–29 hari dengan tanggal mulai hari ini. Sewa
-              bulanan maksimal 1 bulan per transaksi dengan tarif hemat 25x harga
-              harian.
+              Sewa harian berlaku mulai 1 hari hingga maksimal (jumlah hari bulan
+              berjalan - 1) dengan tanggal mulai hari ini. Sewa bulanan maksimal
+              1 bulan per transaksi dengan tarif hemat 25x harga harian.
             </p>
           </div>
         </div>
